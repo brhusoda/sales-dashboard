@@ -2,6 +2,7 @@
 let leads = [];
 let selectedLeadId = null;
 let showLemlist = false;
+let sfConfig = { sfInstance: '', owners: {} };
 
 // ── DOM refs ──
 const leadListContent = document.getElementById('lead-list-content');
@@ -26,7 +27,7 @@ const importResult = document.getElementById('import-result');
 
 // ── Init ──
 async function init() {
-  await Promise.all([loadOwners(), loadStages()]);
+  await Promise.all([loadOwners(), loadStages(), loadSfConfig()]);
   await loadLeads();
   await loadSummary();
 
@@ -56,6 +57,16 @@ async function init() {
     document.getElementById('next-step-form').classList.add('hidden');
   });
   document.getElementById('btn-save-next-step').addEventListener('click', saveNextStep);
+
+  // Quick due date buttons
+  document.querySelectorAll('.ns-due-quick').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = new Date();
+      if (btn.dataset.days) d.setDate(d.getDate() + parseInt(btn.dataset.days));
+      if (btn.dataset.months) d.setMonth(d.getMonth() + parseInt(btn.dataset.months));
+      document.getElementById('ns-due').value = d.toISOString().split('T')[0];
+    });
+  });
 }
 
 // ── Data Loading ──
@@ -66,6 +77,23 @@ async function loadOwners() {
     opt.value = o;
     opt.textContent = o;
     filterOwner.appendChild(opt);
+  }
+}
+
+async function loadSfConfig() {
+  try {
+    sfConfig = await fetch('/api/sf-config').then(r => r.json());
+  } catch (err) {
+    sfConfig = { sfInstance: '', owners: {} };
+  }
+  const select = document.getElementById('ns-owner');
+  select.innerHTML = '';
+  for (const name of Object.keys(sfConfig.owners)) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.dataset.sfId = sfConfig.owners[name];
+    opt.textContent = name;
+    select.appendChild(opt);
   }
 }
 
@@ -258,7 +286,10 @@ async function loadDetail(leadId) {
   const lead = data.lead;
 
   // Header
-  document.getElementById('detail-company').textContent = lead.company;
+  const sfLeadUrl = `https://${sfConfig.sfInstance}.lightning.force.com/lightning/r/Lead/${lead.lead_id}/view`;
+  document.getElementById('detail-company').innerHTML = sfConfig.sfInstance
+    ? `<a href="${sfLeadUrl}" target="_blank" title="Open in Salesforce">${esc(lead.company)}</a>`
+    : esc(lead.company);
   document.getElementById('detail-contact').innerHTML =
     `${esc(lead.first_name)} ${esc(lead.last_name)}` +
     (lead.title ? ` &mdash; ${esc(lead.title)}` : '') +
@@ -321,7 +352,7 @@ function renderPipeline(currentStage, stages) {
   }
 }
 
-// ── Next Steps ──
+// ── Next Steps (open tasks) ──
 function renderNextSteps(nextSteps) {
   const el = document.getElementById('next-steps-list');
   el.innerHTML = '';
@@ -330,31 +361,30 @@ function renderNextSteps(nextSteps) {
   document.getElementById('next-step-form').classList.add('hidden');
 
   if (nextSteps.length === 0) {
-    el.innerHTML = '<div class="next-step-empty">No next steps defined — consider adding one.</div>';
+    el.innerHTML = '<div class="next-step-empty">No open tasks — consider adding one.</div>';
     return;
   }
 
-  for (const ns of nextSteps) {
+  for (const task of nextSteps) {
     const item = document.createElement('div');
     item.className = 'next-step-item';
 
     const metaParts = [];
-    if (ns.owner) metaParts.push(`Owner: ${esc(ns.owner)}`);
-    if (ns.due_date) metaParts.push(`Due: ${esc(ns.due_date)}`);
-    if (ns.comments) metaParts.push(esc(ns.comments));
+    if (task.assigned) metaParts.push(`Owner: ${esc(task.assigned)}`);
+    if (task.date) metaParts.push(`Due: ${esc(task.date)}`);
+    if (task.comments) metaParts.push(esc(task.comments));
 
     item.innerHTML = `
       <div class="ns-content">
-        <div class="ns-title">${esc(ns.next_step)}</div>
+        <div class="ns-title">${esc(task.subject)}</div>
         ${metaParts.length > 0 ? `<div class="ns-meta">${metaParts.join(' &middot; ')}</div>` : ''}
       </div>
-      <span class="ns-badge ${esc(ns.source)}">${esc(ns.source)}</span>
-      <button class="ns-delete" data-id="${ns.id}" title="Delete">&times;</button>
+      <button class="ns-delete" data-id="${esc(task.activity_id)}" title="Delete">&times;</button>
     `;
 
     item.querySelector('.ns-delete').addEventListener('click', async (e) => {
       e.stopPropagation();
-      await fetch(`/api/next-steps/${ns.id}`, { method: 'DELETE' });
+      await fetch(`/api/next-steps/${task.activity_id}`, { method: 'DELETE' });
       if (selectedLeadId) loadDetail(selectedLeadId);
     });
 
@@ -362,17 +392,48 @@ function renderNextSteps(nextSteps) {
   }
 }
 
+/**
+ * Build a pre-filled Salesforce Lightning URL for creating a new Task.
+ *
+ * Args:
+ *   subject (string): SF Subject picklist value (Call, Email, etc.).
+ *   dueDate (string): ISO date string (YYYY-MM-DD).
+ *   whoId (string): SF Lead/Contact ID (WhoId).
+ *   ownerId (string): SF User ID for task owner.
+ *
+ * Returns:
+ *   string: Full Salesforce Lightning URL.
+ */
+function buildSalesforceTaskUrl(subject, dueDate, whoId, ownerId) {
+  const fields = [
+    `Subject=${encodeURIComponent(subject)}`,
+    `ActivityDate=${encodeURIComponent(dueDate)}`,
+    `WhoId=${encodeURIComponent(whoId)}`,
+    `OwnerId=${encodeURIComponent(ownerId)}`,
+    'Status=Open',
+    'Priority=Normal',
+    'Type=Other',
+  ];
+  return `https://${sfConfig.sfInstance}.lightning.force.com/lightning/o/Task/new?defaultFieldValues=${fields.join(',')}`;
+}
+
 async function saveNextStep() {
   if (!selectedLeadId) return;
 
-  const nextStep = document.getElementById('ns-step').value.trim();
-  if (!nextStep) return;
+  const subject = document.getElementById('ns-subject').value.trim();
+  if (!subject) return;
+  const comments = document.getElementById('ns-comments').value.trim();
+  const dueDate = document.getElementById('ns-due').value;
+  const ownerSelect = document.getElementById('ns-owner');
+  const ownerName = ownerSelect.value;
+  const ownerOption = ownerSelect.selectedOptions[0];
+  const sfOwnerId = ownerOption ? ownerOption.dataset.sfId : '';
 
   const body = {
-    next_step: nextStep,
-    owner: document.getElementById('ns-owner').value.trim() || undefined,
-    due_date: document.getElementById('ns-due').value || undefined,
-    comments: document.getElementById('ns-comments').value.trim() || undefined,
+    subject,
+    owner: ownerName || undefined,
+    due_date: dueDate || undefined,
+    comments: comments || undefined,
   };
 
   await fetch(`/api/leads/${selectedLeadId}/next-steps`, {
@@ -381,9 +442,27 @@ async function saveNextStep() {
     body: JSON.stringify(body),
   });
 
+  // Salesforce task creation
+  const createSf = document.getElementById('ns-create-sf').checked;
+  if (createSf && sfConfig.sfInstance && sfOwnerId) {
+    const sfDueDate = dueDate || new Date().toISOString().split('T')[0];
+
+    // Copy comments to clipboard so user can paste into SF Description field
+    if (comments) {
+      try {
+        await navigator.clipboard.writeText(comments);
+      } catch (err) {
+        // Clipboard API may fail in non-secure contexts; ignore
+      }
+    }
+
+    const url = buildSalesforceTaskUrl(subject, sfDueDate, selectedLeadId, sfOwnerId);
+    window.open(url, '_blank');
+  }
+
   // Clear form
-  document.getElementById('ns-step').value = '';
-  document.getElementById('ns-owner').value = '';
+  document.getElementById('ns-subject').value = '';
+  document.getElementById('ns-owner').selectedIndex = 0;
   document.getElementById('ns-due').value = '';
   document.getElementById('ns-comments').value = '';
   document.getElementById('next-step-form').classList.add('hidden');
@@ -418,17 +497,23 @@ function renderTimeline(tasks) {
       <div class="timeline-date">${esc(task.date || 'No date')}</div>
       <div class="timeline-body">
         <div class="timeline-subject">
-          ${esc(task.subject)}
+          ${task.activity_id && !task.activity_id.startsWith('manual-') && sfConfig.sfInstance
+            ? `<a href="https://${sfConfig.sfInstance}.lightning.force.com/lightning/r/Task/${esc(task.activity_id)}/view" target="_blank" title="Open in Salesforce">${esc(task.subject)}</a>`
+            : esc(task.subject)}
           ${isOverdue ? ' <span class="overdue-badge">OVERDUE</span>' : ''}
         </div>
         <div class="timeline-status">
           <span class="${statusClass}">${esc(task.status || 'No status')}</span>
         </div>
         <div class="timeline-meta">
-          ${task.assigned ? 'Assigned: ' + esc(task.assigned) : ''}
-          ${task.opportunity ? ' | Opp: ' + esc(task.opportunity) : ''}
-          ${task.contact ? ' | Contact: ' + esc(task.contact) : ''}
-          ${task.task ? ' | Type: ' + esc(task.task) : ''}
+          ${(() => {
+            const parts = [];
+            if (task.assigned) parts.push('Assigned: ' + esc(task.assigned));
+            if (task.opportunity) parts.push('Opp: ' + esc(task.opportunity));
+            if (task.contact) parts.push('Contact: ' + esc(task.contact));
+            if (task.task) parts.push('Type: ' + esc(task.task));
+            return parts.join(' | ');
+          })()}
         </div>
         ${hasComments ? `
           <button class="timeline-toggle" onclick="toggleComments(this)">Show comments</button>

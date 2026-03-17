@@ -30,13 +30,15 @@ Rules and standards for AI-assisted development on this repository.
 
 ### Data flow
 ```
-Excel files (Google Drive) → import.js → SQLite (local) → Express API → Vanilla JS frontend
+Leads Excel (Google Drive) ─┐
+                             ├→ import.js → SQLite (local) → Express API → Vanilla JS frontend
+Activities Excel (Google Drive) ┘
 ```
 
-### Lead-task linking (name-based)
-Tasks are linked to leads by matching person names, not company names. Both tables store a `lead_name_norm` column (`lower(trim(first + ' ' + last))` for leads, `lower(trim(tasks.lead))` for tasks). The join is a simple equality on `lead_name_norm` at query time — no precomputed link table needed.
+### Lead-task linking (ID-based)
+Tasks are linked to leads via a direct `lead_id` foreign key. The `Activities_WithLeads` Excel export includes a `Lead ID` column on every activity row, which maps directly to `leads.lead_id`. The server join is a simple `WHERE t.lead_id = ?` — no name matching needed.
 
-The old `lead_task_links` table and fuzzy company matching (`findBestMatch`) have been removed. The `lead_task_links` DDL is kept in `db.js` to avoid migration issues but is not used.
+The `lead_name_norm` column is still populated on both tables for backward compatibility but is no longer used for joining. The old `lead_task_links` table DDL is kept in `db.js` to avoid migration issues but is not used.
 
 ### Company normalization (matching.js)
 `normalizeCompany` is still used for the `company_norm` column: strip diacritics (NFD decompose), lowercase, remove punctuation, remove common business suffixes (Ltd, GmbH, Group, SA, etc.), collapse whitespace.

@@ -5,7 +5,7 @@ Local web dashboard for reviewing qualified sales leads by cross-referencing the
 ## What it does
 
 - Imports leads and tasks from Salesforce Excel exports into a local SQLite database
-- Links tasks to leads by matching person names (the `Lead` column in tasks against `First Name + Last Name` in leads)
+- Links activities to leads via direct `Lead ID` foreign key (from the `Activities_WithLeads` export)
 - Detects pipeline stage from task subject patterns (Intro Meeting → Demo → POC → Commercial)
 - Flags leads needing attention (stale, overdue tasks, no activity, negative outcomes, no next step)
 - Tracks next steps per lead (manual entry now, AI-suggested later)
@@ -31,7 +31,7 @@ The import reads two Excel files from Google Drive:
 | File | Contents |
 |---|---|
 | `QualifiedLeads_*.xlsx` | ~38 qualified leads with contact info, rating, owner, status |
-| `Tasks_*.xlsx` | ~720 Salesforce task/activity records |
+| `Activities_WithLeads_*.xls` | ~515 Salesforce activities with `Lead ID` FK for direct lead linking |
 
 Default paths are configured in `import.js`. You can also re-import from the dashboard UI with custom file paths.
 

@@ -5,7 +5,7 @@ const { normalizeCompany } = require('./matching');
 
 // Default file paths
 const DEFAULT_LEADS_FILE = path.resolve('G:/My Drive/Administration/Forecast/QBR/QualifiedLeads_20260316_v2.xls.xlsx');
-const DEFAULT_TASKS_FILE = path.resolve('G:/My Drive/Administration/Forecast/QBR/Tasks_20260316.xlsx');
+const DEFAULT_TASKS_FILE = path.resolve('G:/My Drive/Administration/Forecast/QBR/Activities_WithLeads_20260317.xls');
 
 /**
  * Convert Excel serial date to ISO string (YYYY-MM-DD).
@@ -13,8 +13,14 @@ const DEFAULT_TASKS_FILE = path.resolve('G:/My Drive/Administration/Forecast/QBR
 function excelDateToISO(serial) {
   if (!serial) return null;
   if (typeof serial === 'string') {
-    // Already a date string
+    // Already ISO format
     if (/^\d{4}-\d{2}-\d{2}/.test(serial)) return serial.substring(0, 10);
+    // DD/MM/YYYY format (common in new activities file)
+    const ddmmyyyy = serial.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (ddmmyyyy) {
+      const [, day, month, year] = ddmmyyyy;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
     return serial;
   }
   // Excel serial date: days since 1900-01-01 (with the 1900 leap year bug)
@@ -109,15 +115,20 @@ async function runImport(leadsFile, tasksFile) {
       INSERT OR REPLACE INTO tasks
         (activity_id, date, company, opportunity, contact, lead,
          subject, assigned, priority, status, task, comments,
-         company_norm, is_lemlist, lead_name_norm)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         company_norm, is_lemlist, lead_name_norm, lead_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     let taskCount = 0;
     for (const row of tasksData) {
-      const company = row['Company / Account'] || '';
+      // Support both old format (Company / Account) and new format (Company)
+      const company = row['Company / Account'] || row['Company'] || '';
       const subject = row['Subject'] || '';
-      const leadName = row['Lead'] || '';
+      // New format: First Name + Last Name; old format: Lead column
+      const firstName = row['First Name'] || '';
+      const lastName = row['Last Name'] || '';
+      const leadName = row['Lead'] || (firstName || lastName ? `${firstName} ${lastName}`.trim() : '');
+      const leadId = row['Lead ID'] || '';
       insertTask.run([
         row['Activity ID'] || '',
         excelDateToISO(row['Date']),
@@ -134,6 +145,7 @@ async function runImport(leadsFile, tasksFile) {
         normalizeCompany(company),
         isLemlist(subject) ? 1 : 0,
         leadName.trim().toLowerCase(),
+        leadId,
       ]);
       taskCount++;
     }

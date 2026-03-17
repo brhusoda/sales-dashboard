@@ -108,20 +108,30 @@
           <button id="btn-add-next-step" class="btn btn-secondary" style="margin-top:8px;">Add next step</button>
           <div id="next-step-form" class="hidden" style="margin-top:10px;">
             <div class="form-group">
-              <label>Next step *</label>
-              <input type="text" id="ns-step" class="input" placeholder="e.g. Schedule follow-up call">
+              <label>Subject *</label>
+              <input type="text" id="ns-subject" class="input" placeholder="e.g. Call, Requalify, Schedule demo">
             </div>
             <div class="form-group">
               <label>Owner</label>
-              <input type="text" id="ns-owner" class="input" placeholder="Owner name">
+              <select id="ns-owner" class="input"><option value="">Select owner</option></select>
             </div>
             <div class="form-group">
               <label>Due date</label>
-              <input type="date" id="ns-due" class="input">
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input type="date" id="ns-due" class="input" style="flex:1;">
+                <button type="button" class="btn btn-secondary ns-due-quick" data-days="15">+15d</button>
+                <button type="button" class="btn btn-secondary ns-due-quick" data-months="1">+1m</button>
+                <button type="button" class="btn btn-secondary ns-due-quick" data-months="3">+3m</button>
+              </div>
             </div>
             <div class="form-group">
               <label>Comments</label>
               <input type="text" id="ns-comments" class="input" placeholder="Optional notes">
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="ns-create-sf" checked> Also create in Salesforce
+              </label>
             </div>
             <div style="display:flex;gap:8px;">
               <button id="btn-save-next-step" class="btn btn-primary">Save</button>
@@ -137,6 +147,7 @@
             <input type="checkbox" id="toggle-lemlist"> Show lemlist tasks
           </label>
           <button id="btn-expand-all" class="btn btn-secondary">Expand all comments</button>
+          <button id="btn-copy-activities" class="btn btn-secondary">Copy all activities</button>
           <div id="timeline-list"></div>
         </div>
       </div>
@@ -153,7 +164,7 @@
         <input type="text" id="import-leads-path" class="input">
       </div>
       <div class="form-group">
-        <label>Tasks File:</label>
+        <label>Activities File:</label>
         <input type="text" id="import-tasks-path" class="input">
       </div>
       <div class="modal-actions">

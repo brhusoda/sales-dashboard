@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const { getDb, saveDb } = require('./db');
 const { deriveStage, getStages } = require('./sales-stage');
 const { runImport, DEFAULT_LEADS_FILE, DEFAULT_TASKS_FILE } = require('./import');
@@ -10,14 +11,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
 
-// Helper: get tasks for a lead via lead_name_norm join
+// Helper: get tasks for a lead via lead_id FK
 function getLeadTasks(db, leadId, includeLemlist = false) {
   const lemlistFilter = includeLemlist ? '' : 'AND t.is_lemlist = 0';
   const stmt = db.prepare(`
     SELECT t.* FROM tasks t
-    INNER JOIN leads l ON t.lead_name_norm = l.lead_name_norm
-      AND l.lead_name_norm != ''
-    WHERE l.lead_id = ?
+    WHERE t.lead_id = ?
     ${lemlistFilter}
     ORDER BY t.date DESC
   `);
@@ -185,10 +184,8 @@ app.get('/api/leads/:id/timeline', async (req, res) => {
     const stage = deriveStage(tasks.filter(t => !t.is_lemlist));
     const attention = computeAttention(lead, tasks.filter(t => !t.is_lemlist), stage);
 
-    // Get next steps
-    const nextSteps = queryAllParams(db, `
-      SELECT * FROM next_steps WHERE lead_id = ? ORDER BY created_at DESC
-    `, [leadId]);
+    // Next steps = open tasks
+    const nextSteps = tasks.filter(t => t.status && t.status.toLowerCase().includes('open'));
 
     res.json({
       lead,
@@ -203,40 +200,27 @@ app.get('/api/leads/:id/timeline', async (req, res) => {
   }
 });
 
-// GET /api/leads/:id/next-steps
-app.get('/api/leads/:id/next-steps', async (req, res) => {
-  try {
-    const db = await getDb();
-    const nextSteps = queryAllParams(db, `
-      SELECT * FROM next_steps WHERE lead_id = ? ORDER BY created_at DESC
-    `, [req.params.id]);
-    res.json(nextSteps);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/leads/:id/next-steps
+// POST /api/leads/:id/next-steps — creates an open task (a "next step" is an open task with a future date)
 app.post('/api/leads/:id/next-steps', async (req, res) => {
   try {
     const db = await getDb();
     const leadId = req.params.id;
-    const { next_step, owner, due_date, comments, source } = req.body;
+    const { subject, owner, due_date, comments } = req.body;
 
-    if (!next_step) return res.status(400).json({ error: 'next_step is required' });
+    if (!subject) return res.status(400).json({ error: 'subject is required' });
 
+    const activityId = `manual-${Date.now()}`;
     const stmt = db.prepare(`
-      INSERT INTO next_steps (lead_id, next_step, owner, due_date, comments, source, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (activity_id, date, subject, assigned, status, comments, lead_id, is_lemlist)
+      VALUES (?, ?, ?, ?, 'Open', ?, ?, 0)
     `);
     stmt.run([
-      leadId,
-      next_step,
-      owner || null,
+      activityId,
       due_date || null,
+      subject,
+      owner || null,
       comments || null,
-      source || 'manual',
-      new Date().toISOString(),
+      leadId,
     ]);
     stmt.free();
     saveDb();
@@ -247,12 +231,12 @@ app.post('/api/leads/:id/next-steps', async (req, res) => {
   }
 });
 
-// DELETE /api/next-steps/:id
+// DELETE /api/next-steps/:id — deletes a task by activity_id
 app.delete('/api/next-steps/:id', async (req, res) => {
   try {
     const db = await getDb();
-    const stmt = db.prepare('DELETE FROM next_steps WHERE id = ?');
-    stmt.run([parseInt(req.params.id)]);
+    const stmt = db.prepare('DELETE FROM tasks WHERE activity_id = ?');
+    stmt.run([req.params.id]);
     stmt.free();
     saveDb();
     res.json({ ok: true });
@@ -304,6 +288,17 @@ app.post('/api/import', async (req, res) => {
     res.json(summary);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/sf-config — Salesforce team config for task creation
+app.get('/api/sf-config', (req, res) => {
+  const sfPath = path.join(__dirname, 'sf-team.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(sfPath, 'utf8'));
+    res.json(data);
+  } catch (err) {
+    res.json({ sfInstance: '', owners: {} });
   }
 });
 

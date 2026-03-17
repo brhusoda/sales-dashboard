@@ -60,9 +60,17 @@ async function getDb() {
       comments TEXT,
       company_norm TEXT,
       is_lemlist INTEGER DEFAULT 0,
-      lead_name_norm TEXT
+      lead_name_norm TEXT,
+      lead_id TEXT
     )
   `);
+
+  // Migration: add lead_id to tasks for existing DBs
+  try {
+    db.run('ALTER TABLE tasks ADD COLUMN lead_id TEXT');
+  } catch (e) {
+    // Column already exists — safe to ignore
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS lead_task_links (
@@ -97,6 +105,7 @@ async function getDb() {
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks(date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_is_lemlist ON tasks(is_lemlist)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tasks_lead_id ON tasks(lead_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_links_company_norm ON lead_task_links(company_norm)');
   db.run('CREATE INDEX IF NOT EXISTS idx_next_steps_lead_id ON next_steps(lead_id)');
 
