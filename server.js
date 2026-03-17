@@ -10,23 +10,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
 
-// Helper: get tasks for a lead via lead_task_links
+// Helper: get tasks for a lead via lead_name_norm join
 function getLeadTasks(db, leadId, includeLemlist = false) {
   const lemlistFilter = includeLemlist ? '' : 'AND t.is_lemlist = 0';
-  const result = db.exec(`
+  const stmt = db.prepare(`
     SELECT t.* FROM tasks t
-    INNER JOIN lead_task_links ltl ON t.company_norm = ltl.company_norm
-    WHERE ltl.lead_id = '${leadId.replace(/'/g, "''")}'
+    INNER JOIN leads l ON t.lead_name_norm = l.lead_name_norm
+      AND l.lead_name_norm != ''
+    WHERE l.lead_id = ?
     ${lemlistFilter}
     ORDER BY t.date DESC
   `);
-  if (result.length === 0) return [];
-  const cols = result[0].columns;
-  return result[0].values.map(row => {
-    const obj = {};
-    cols.forEach((c, i) => obj[c] = row[i]);
-    return obj;
-  });
+  stmt.bind([leadId]);
+
+  const rows = [];
+  while (stmt.step()) {
+    rows.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return rows;
 }
 
 // Helper: run a query and return array of objects
@@ -39,6 +41,18 @@ function queryAll(db, sql) {
     cols.forEach((c, i) => obj[c] = row[i]);
     return obj;
   });
+}
+
+// Helper: run a parameterized query and return array of objects
+function queryAllParams(db, sql, params) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) {
+    rows.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return rows;
 }
 
 // Compute attention flags
@@ -62,6 +76,19 @@ function computeAttention(lead, tasks, stage) {
   const openTasks = tasks.filter(t => t.status && t.status.toLowerCase().includes('open'));
   if (openTasks.length > 0) {
     flags.push({ type: 'open_tasks', message: `${openTasks.length} open task(s)` });
+  }
+
+  // Overdue open tasks (date in the past)
+  const overdueTasks = openTasks.filter(t => t.date && new Date(t.date) < now);
+  if (overdueTasks.length > 0) {
+    const oldest = overdueTasks[overdueTasks.length - 1].date; // tasks sorted DESC, last = oldest
+    const daysOverdue = Math.floor((now - new Date(oldest)) / 86400000);
+    flags.push({ type: 'overdue', message: `${overdueTasks.length} overdue task(s) — oldest ${daysOverdue}d ago` });
+  }
+
+  // No open tasks — needs next step
+  if (tasks.length > 0 && openTasks.length === 0) {
+    flags.push({ type: 'no_open_task', message: 'No open task — needs next step' });
   }
 
   // Negative outcome on last interaction
@@ -100,6 +127,9 @@ app.get('/api/leads', async (req, res) => {
         ? Math.floor((new Date() - new Date(lead.last_activity)) / 86400000)
         : null;
 
+      const openTasks = tasks.filter(t => t.status && t.status.toLowerCase().includes('open'));
+      const nextStep = openTasks.length > 0 ? openTasks[0].subject : null;
+
       return {
         ...lead,
         task_count: tasks.length,
@@ -107,6 +137,9 @@ app.get('/api/leads', async (req, res) => {
         attention,
         days_since_activity: daysSinceActivity,
         needs_attention: attention.length > 0,
+        open_tasks: openTasks.length,
+        has_open_task: openTasks.length > 0,
+        next_step: nextStep,
       };
     });
 
@@ -144,7 +177,7 @@ app.get('/api/leads/:id/timeline', async (req, res) => {
     const db = await getDb();
     const leadId = req.params.id;
 
-    const leads = queryAll(db, `SELECT * FROM leads WHERE lead_id = '${leadId.replace(/'/g, "''")}'`);
+    const leads = queryAllParams(db, 'SELECT * FROM leads WHERE lead_id = ?', [leadId]);
     if (leads.length === 0) return res.status(404).json({ error: 'Lead not found' });
 
     const lead = leads[0];
@@ -152,11 +185,10 @@ app.get('/api/leads/:id/timeline', async (req, res) => {
     const stage = deriveStage(tasks.filter(t => !t.is_lemlist));
     const attention = computeAttention(lead, tasks.filter(t => !t.is_lemlist), stage);
 
-    // Get linked companies
-    const links = queryAll(db, `
-      SELECT company_norm, match_type, confidence FROM lead_task_links
-      WHERE lead_id = '${leadId.replace(/'/g, "''")}'
-    `);
+    // Get next steps
+    const nextSteps = queryAllParams(db, `
+      SELECT * FROM next_steps WHERE lead_id = ? ORDER BY created_at DESC
+    `, [leadId]);
 
     res.json({
       lead,
@@ -164,8 +196,66 @@ app.get('/api/leads/:id/timeline', async (req, res) => {
       stage,
       stages: getStages(),
       attention,
-      links,
+      nextSteps,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/leads/:id/next-steps
+app.get('/api/leads/:id/next-steps', async (req, res) => {
+  try {
+    const db = await getDb();
+    const nextSteps = queryAllParams(db, `
+      SELECT * FROM next_steps WHERE lead_id = ? ORDER BY created_at DESC
+    `, [req.params.id]);
+    res.json(nextSteps);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/leads/:id/next-steps
+app.post('/api/leads/:id/next-steps', async (req, res) => {
+  try {
+    const db = await getDb();
+    const leadId = req.params.id;
+    const { next_step, owner, due_date, comments, source } = req.body;
+
+    if (!next_step) return res.status(400).json({ error: 'next_step is required' });
+
+    const stmt = db.prepare(`
+      INSERT INTO next_steps (lead_id, next_step, owner, due_date, comments, source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run([
+      leadId,
+      next_step,
+      owner || null,
+      due_date || null,
+      comments || null,
+      source || 'manual',
+      new Date().toISOString(),
+    ]);
+    stmt.free();
+    saveDb();
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/next-steps/:id
+app.delete('/api/next-steps/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const stmt = db.prepare('DELETE FROM next_steps WHERE id = ?');
+    stmt.run([parseInt(req.params.id)]);
+    stmt.free();
+    saveDb();
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -205,24 +295,6 @@ app.get('/api/summary', async (req, res) => {
   }
 });
 
-// GET /api/unmatched
-app.get('/api/unmatched', async (req, res) => {
-  try {
-    const db = await getDb();
-    const unmatched = queryAll(db, `
-      SELECT DISTINCT t.company, t.company_norm, COUNT(*) as task_count
-      FROM tasks t
-      WHERE t.company_norm != ''
-        AND t.company_norm NOT IN (SELECT company_norm FROM lead_task_links)
-      GROUP BY t.company_norm
-      ORDER BY task_count DESC
-    `);
-    res.json(unmatched);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // POST /api/import
 app.post('/api/import', async (req, res) => {
   try {
@@ -230,43 +302,6 @@ app.post('/api/import', async (req, res) => {
     const tasksFile = req.body.tasksFile || DEFAULT_TASKS_FILE;
     const summary = await runImport(leadsFile, tasksFile);
     res.json(summary);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/links — manually link a lead to a task company
-app.post('/api/links', async (req, res) => {
-  try {
-    const db = await getDb();
-    const { leadId, companyNorm } = req.body;
-    if (!leadId || !companyNorm) return res.status(400).json({ error: 'leadId and companyNorm required' });
-
-    db.run(`
-      INSERT OR REPLACE INTO lead_task_links (lead_id, company_norm, match_type, confidence)
-      VALUES ('${leadId.replace(/'/g, "''")}', '${companyNorm.replace(/'/g, "''")}', 'manual', 1.0)
-    `);
-    saveDb();
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /api/links — remove a manual link
-app.delete('/api/links', async (req, res) => {
-  try {
-    const db = await getDb();
-    const { leadId, companyNorm } = req.body;
-    if (!leadId || !companyNorm) return res.status(400).json({ error: 'leadId and companyNorm required' });
-
-    db.run(`
-      DELETE FROM lead_task_links
-      WHERE lead_id = '${leadId.replace(/'/g, "''")}'
-        AND company_norm = '${companyNorm.replace(/'/g, "''")}'
-    `);
-    saveDb();
-    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

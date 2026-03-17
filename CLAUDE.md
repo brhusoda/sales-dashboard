@@ -33,23 +33,31 @@ Rules and standards for AI-assisted development on this repository.
 Excel files (Google Drive) → import.js → SQLite (local) → Express API → Vanilla JS frontend
 ```
 
-### Company name matching (matching.js)
-Custom fuzzy matching at import time, not a SQL feature. Four-stage strategy:
-1. **Exact** match on normalized names
-2. **Spaceless exact** — collapse all spaces then compare (handles "TotalEnergies" vs "TOTAL ENERGIES GLOBAL")
-3. **Contains** — substring match (handles "TAP" in "TAP Air Portugal")
-4. **Token overlap** — Jaccard similarity on word tokens
+### Lead-task linking (name-based)
+Tasks are linked to leads by matching person names, not company names. Both tables store a `lead_name_norm` column (`lower(trim(first + ' ' + last))` for leads, `lower(trim(tasks.lead))` for tasks). The join is a simple equality on `lead_name_norm` at query time — no precomputed link table needed.
 
-Results are precomputed and stored in `lead_task_links` table. SQL only joins on this table at query time.
+The old `lead_task_links` table and fuzzy company matching (`findBestMatch`) have been removed. The `lead_task_links` DDL is kept in `db.js` to avoid migration issues but is not used.
 
-### Normalization (normalizeCompany)
-Strip diacritics (NFD decompose), lowercase, remove punctuation, remove common business suffixes (Ltd, GmbH, Group, SA, etc.), collapse whitespace.
+### Company normalization (matching.js)
+`normalizeCompany` is still used for the `company_norm` column: strip diacritics (NFD decompose), lowercase, remove punctuation, remove common business suffixes (Ltd, GmbH, Group, SA, etc.), collapse whitespace.
+
+### Next steps (next_steps table)
+Infrastructure for tracking what should happen next for a lead. Each next step has: `next_step`, `owner`, `due_date`, `comments`, `source` (`manual` or `ai_suggested`). Managed via REST endpoints and an inline form in the detail panel. The `ai_suggested` source is reserved for future AI skill integration.
+
+### Attention flags
+Computed per-lead at query time from task data:
+- `stale` — no activity in 14d (Hot) or 30d (other ratings)
+- `no_activity` — zero tasks linked
+- `open_tasks` — has open tasks
+- `overdue` — has open tasks with date in the past
+- `no_open_task` — has tasks but none open (needs next step)
+- `negative` — last task had negative outcome
+- `stuck` — in early stage (0-2) for 60+ days
 
 ### Pipeline stage detection (sales-stage.js)
 6 stages derived from task Subject keyword patterns. Only tasks with status `Completed - positive outcome` advance a stage. The highest detected stage wins. Stages can be skipped (a lead can go from Demo straight to Commercial).
 
 ### Known limitations to address
-- **Duplicate company leads**: When multiple leads share the same company name, only the first gets linked to tasks. `lead_task_links` needs one-to-many support.
 - **Pipeline visualization**: Currently fills all intermediate stage dots up to the current stage, implying linear progression. Should only fill stages actually detected in task history.
 
 ---

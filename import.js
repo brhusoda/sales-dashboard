@@ -1,7 +1,7 @@
 const XLSX = require('xlsx');
 const path = require('path');
 const { getDb, saveDb } = require('./db');
-const { normalizeCompany, findBestMatch } = require('./matching');
+const { normalizeCompany } = require('./matching');
 
 // Default file paths
 const DEFAULT_LEADS_FILE = path.resolve('G:/My Drive/Administration/Forecast/QBR/QualifiedLeads_20260316_v2.xls.xlsx');
@@ -32,6 +32,20 @@ function isLemlist(subject) {
 }
 
 /**
+ * Normalize a person name for lead-task matching: lower(trim(name)).
+ *
+ * Args:
+ *   firstName (string): First name.
+ *   lastName (string): Last name.
+ *
+ * Returns:
+ *   string: Normalized full name, e.g. "caspar heusser".
+ */
+function normalizeLeadName(firstName, lastName) {
+  return `${(firstName || '').trim()} ${(lastName || '').trim()}`.trim().toLowerCase();
+}
+
+/**
  * Import leads and tasks from Excel files into SQLite.
  */
 async function runImport(leadsFile, tasksFile) {
@@ -59,17 +73,19 @@ async function runImport(leadsFile, tasksFile) {
       INSERT OR REPLACE INTO leads
         (lead_id, first_name, last_name, title, company, email,
          lead_source, street, rating, lead_owner, lead_status,
-         converted, create_date, last_activity, company_norm)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         converted, create_date, last_activity, company_norm, lead_name_norm)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     let leadCount = 0;
     for (const row of leadsData) {
       const company = row['Company / Account'] || '';
+      const firstName = row['First Name'] || '';
+      const lastName = row['Last Name'] || '';
       insertLead.run([
         row['Lead ID'] || '',
-        row['First Name'] || '',
-        row['Last Name'] || '',
+        firstName,
+        lastName,
         row['Title'] || '',
         company,
         row['Email'] || '',
@@ -82,6 +98,7 @@ async function runImport(leadsFile, tasksFile) {
         excelDateToISO(row['Create Date']),
         excelDateToISO(row['Last Activity']),
         normalizeCompany(company),
+        normalizeLeadName(firstName, lastName),
       ]);
       leadCount++;
     }
@@ -92,21 +109,22 @@ async function runImport(leadsFile, tasksFile) {
       INSERT OR REPLACE INTO tasks
         (activity_id, date, company, opportunity, contact, lead,
          subject, assigned, priority, status, task, comments,
-         company_norm, is_lemlist)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         company_norm, is_lemlist, lead_name_norm)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     let taskCount = 0;
     for (const row of tasksData) {
       const company = row['Company / Account'] || '';
       const subject = row['Subject'] || '';
+      const leadName = row['Lead'] || '';
       insertTask.run([
         row['Activity ID'] || '',
         excelDateToISO(row['Date']),
         company,
         row['Opportunity'] || '',
         row['Contact'] || '',
-        row['Lead'] || '',
+        leadName,
         subject,
         row['Assigned'] || '',
         row['Priority'] || '',
@@ -115,70 +133,11 @@ async function runImport(leadsFile, tasksFile) {
         row['Comments'] || '',
         normalizeCompany(company),
         isLemlist(subject) ? 1 : 0,
+        leadName.trim().toLowerCase(),
       ]);
       taskCount++;
     }
     insertTask.free();
-
-    // --- REBUILD LEAD_TASK_LINKS ---
-    // Delete auto-matches but preserve manual overrides
-    db.run("DELETE FROM lead_task_links WHERE match_type != 'manual'");
-
-    // Build a map of lead company_norm -> lead_id
-    const leadRows = db.exec('SELECT lead_id, company_norm FROM leads');
-    const leadMap = new Map();
-    if (leadRows.length > 0) {
-      for (const row of leadRows[0].values) {
-        // Allow multiple leads per company; store first one
-        if (!leadMap.has(row[1])) {
-          leadMap.set(row[1], row[0]);
-        }
-      }
-    }
-
-    // Get existing manual links to skip
-    const manualLinks = new Set();
-    const manualRows = db.exec("SELECT lead_id, company_norm FROM lead_task_links WHERE match_type = 'manual'");
-    if (manualRows.length > 0) {
-      for (const row of manualRows[0].values) {
-        manualLinks.add(`${row[0]}|${row[1]}`);
-      }
-    }
-
-    // Get distinct task company_norms
-    const taskCompanyRows = db.exec('SELECT DISTINCT company_norm FROM tasks WHERE company_norm != ""');
-    const insertLink = db.prepare(`
-      INSERT OR IGNORE INTO lead_task_links (lead_id, company_norm, match_type, confidence)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    let matchedCount = 0;
-    const unmatchedCompanies = [];
-
-    if (taskCompanyRows.length > 0) {
-      for (const row of taskCompanyRows[0].values) {
-        const taskNorm = row[0];
-
-        // Skip if manual link exists for this company
-        let hasManual = false;
-        for (const mk of manualLinks) {
-          if (mk.endsWith(`|${taskNorm}`)) { hasManual = true; break; }
-        }
-        if (hasManual) continue;
-
-        const match = findBestMatch(taskNorm, leadMap);
-        if (match) {
-          insertLink.run([match.leadId, taskNorm, match.matchType, match.confidence]);
-          matchedCount++;
-        } else {
-          // Find original company name for this norm
-          const origResult = db.exec(`SELECT DISTINCT company FROM tasks WHERE company_norm = '${taskNorm.replace(/'/g, "''")}'`);
-          const origName = origResult.length > 0 ? origResult[0].values[0][0] : taskNorm;
-          unmatchedCompanies.push(origName);
-        }
-      }
-    }
-    insertLink.free();
 
     db.run('COMMIT');
     saveDb();
@@ -186,20 +145,11 @@ async function runImport(leadsFile, tasksFile) {
     const summary = {
       leads: leadCount,
       tasks: taskCount,
-      matched: matchedCount,
-      unmatched: unmatchedCompanies,
     };
 
     console.log(`Import complete:`);
-    console.log(`  Leads:   ${leadCount}`);
-    console.log(`  Tasks:   ${taskCount}`);
-    console.log(`  Matched: ${matchedCount} task companies → leads`);
-    if (unmatchedCompanies.length > 0) {
-      console.log(`  Unmatched (${unmatchedCompanies.length}):`);
-      for (const c of unmatchedCompanies) {
-        console.log(`    - ${c}`);
-      }
-    }
+    console.log(`  Leads: ${leadCount}`);
+    console.log(`  Tasks: ${taskCount}`);
 
     return summary;
   } catch (err) {

@@ -61,6 +61,12 @@
       <label class="checkbox-label">
         <input type="checkbox" id="filter-stale"> Stale only
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="filter-overdue"> Overdue only
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="filter-no-next-step"> No next step
+      </label>
       <button id="btn-clear-filters" class="btn btn-secondary">Clear filters</button>
       <button id="btn-reimport" class="btn btn-secondary">Re-import</button>
     </div>
@@ -95,10 +101,33 @@
           <div id="pipeline-dots"></div>
         </div>
 
-        <!-- Linked Companies -->
-        <div id="detail-links">
-          <h3>Linked Companies</h3>
-          <div id="links-list"></div>
+        <!-- Next Steps -->
+        <div id="detail-next-steps">
+          <h3>Next Steps</h3>
+          <div id="next-steps-list"></div>
+          <button id="btn-add-next-step" class="btn btn-secondary" style="margin-top:8px;">Add next step</button>
+          <div id="next-step-form" class="hidden" style="margin-top:10px;">
+            <div class="form-group">
+              <label>Next step *</label>
+              <input type="text" id="ns-step" class="input" placeholder="e.g. Schedule follow-up call">
+            </div>
+            <div class="form-group">
+              <label>Owner</label>
+              <input type="text" id="ns-owner" class="input" placeholder="Owner name">
+            </div>
+            <div class="form-group">
+              <label>Due date</label>
+              <input type="date" id="ns-due" class="input">
+            </div>
+            <div class="form-group">
+              <label>Comments</label>
+              <input type="text" id="ns-comments" class="input" placeholder="Optional notes">
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button id="btn-save-next-step" class="btn btn-primary">Save</button>
+              <button id="btn-cancel-next-step" class="btn btn-secondary">Cancel</button>
+            </div>
+          </div>
         </div>
 
         <!-- Activity Timeline -->
@@ -132,18 +161,6 @@
         <button id="btn-close-modal" class="btn btn-secondary">Cancel</button>
       </div>
       <div id="import-result" class="hidden"></div>
-    </div>
-  </div>
-
-  <!-- Unmatched Modal -->
-  <div id="unmatched-modal" class="modal hidden">
-    <div class="modal-content">
-      <h2>Unmatched Task Companies</h2>
-      <p>These task companies could not be matched to any lead:</p>
-      <div id="unmatched-list"></div>
-      <div class="modal-actions">
-        <button id="btn-close-unmatched" class="btn btn-secondary">Close</button>
-      </div>
     </div>
   </div>
 

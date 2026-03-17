@@ -39,7 +39,8 @@ async function getDb() {
       converted TEXT,
       create_date TEXT,
       last_activity TEXT,
-      company_norm TEXT
+      company_norm TEXT,
+      lead_name_norm TEXT
     )
   `);
 
@@ -58,7 +59,8 @@ async function getDb() {
       task TEXT,
       comments TEXT,
       company_norm TEXT,
-      is_lemlist INTEGER DEFAULT 0
+      is_lemlist INTEGER DEFAULT 0,
+      lead_name_norm TEXT
     )
   `);
 
@@ -73,13 +75,30 @@ async function getDb() {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS next_steps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id TEXT NOT NULL,
+      next_step TEXT NOT NULL,
+      owner TEXT,
+      due_date TEXT,
+      comments TEXT,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (lead_id) REFERENCES leads(lead_id)
+    )
+  `);
+
   // Create indexes
   db.run('CREATE INDEX IF NOT EXISTS idx_leads_company_norm ON leads(company_norm)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_leads_lead_name_norm ON leads(lead_name_norm)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_company_norm ON tasks(company_norm)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tasks_lead_name_norm ON tasks(lead_name_norm)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks(date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_is_lemlist ON tasks(is_lemlist)');
   db.run('CREATE INDEX IF NOT EXISTS idx_links_company_norm ON lead_task_links(company_norm)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_next_steps_lead_id ON next_steps(lead_id)');
 
   return db;
 }

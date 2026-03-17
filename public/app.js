@@ -13,6 +13,8 @@ const filterRating = document.getElementById('filter-rating');
 const filterStage = document.getElementById('filter-stage');
 const filterTasks = document.getElementById('filter-tasks');
 const filterStale = document.getElementById('filter-stale');
+const filterOverdue = document.getElementById('filter-overdue');
+const filterNoNextStep = document.getElementById('filter-no-next-step');
 const sortBy = document.getElementById('sort-by');
 const btnClearFilters = document.getElementById('btn-clear-filters');
 const toggleLemlist = document.getElementById('toggle-lemlist');
@@ -35,6 +37,8 @@ async function init() {
   filterTasks.addEventListener('change', applyClientFilters);
   sortBy.addEventListener('change', applyClientFilters);
   filterStale.addEventListener('change', loadLeads);
+  filterOverdue.addEventListener('change', applyClientFilters);
+  filterNoNextStep.addEventListener('change', applyClientFilters);
   btnClearFilters.addEventListener('click', clearAllFilters);
   toggleLemlist.addEventListener('change', () => {
     showLemlist = toggleLemlist.checked;
@@ -43,6 +47,15 @@ async function init() {
   btnReimport.addEventListener('click', openImportModal);
   btnCloseModal.addEventListener('click', closeImportModal);
   btnRunImport.addEventListener('click', runImport);
+
+  // Next step form buttons
+  document.getElementById('btn-add-next-step').addEventListener('click', () => {
+    document.getElementById('next-step-form').classList.remove('hidden');
+  });
+  document.getElementById('btn-cancel-next-step').addEventListener('click', () => {
+    document.getElementById('next-step-form').classList.add('hidden');
+  });
+  document.getElementById('btn-save-next-step').addEventListener('click', saveNextStep);
 }
 
 // ── Data Loading ──
@@ -103,6 +116,8 @@ function clearAllFilters() {
   filterTasks.value = '';
   sortBy.value = 'attention';
   filterStale.checked = false;
+  filterOverdue.checked = false;
+  filterNoNextStep.checked = false;
   loadLeads();
 }
 
@@ -126,6 +141,16 @@ function getFilteredLeads() {
       if (taskRange === '11+') return c >= 11;
       return true;
     });
+  }
+
+  // Overdue filter
+  if (filterOverdue.checked) {
+    filtered = filtered.filter(l => l.attention.some(a => a.type === 'overdue'));
+  }
+
+  // No next step filter
+  if (filterNoNextStep.checked) {
+    filtered = filtered.filter(l => !l.next_step);
   }
 
   // Sort
@@ -170,13 +195,22 @@ function renderLeadList() {
   }
 
   for (const lead of filtered) {
+    const isOverdue = lead.attention.some(a => a.type === 'overdue');
+
     const card = document.createElement('div');
     card.className = 'lead-card' +
       (lead.lead_id === selectedLeadId ? ' selected' : '') +
-      (lead.needs_attention ? ' has-attention' : '');
+      (isOverdue ? ' has-overdue' : (lead.needs_attention ? ' has-attention' : ''));
     card.dataset.id = lead.lead_id;
 
     const ratingClass = lead.rating ? `rating-${lead.rating.toLowerCase()}` : '';
+
+    let nextStepHtml = '';
+    if (lead.next_step) {
+      nextStepHtml = `<div class="next-step-preview ok">Next: ${esc(lead.next_step)}</div>`;
+    } else if (lead.task_count > 0) {
+      nextStepHtml = `<div class="next-step-preview warning">No next step</div>`;
+    }
 
     card.innerHTML = `
       <div class="lead-card-header">
@@ -190,9 +224,10 @@ function renderLeadList() {
         <span class="owner">${esc(lead.lead_owner)}</span>
         <div class="stage-dots">${renderStageDots(lead.stage.id)}</div>
         ${lead.days_since_activity !== null ? `<span class="days-badge">${lead.days_since_activity}d</span>` : ''}
-        ${lead.needs_attention ? '<span class="attention-icon">!</span>' : ''}
+        ${isOverdue ? '<span class="overdue-badge">OVERDUE</span>' : (lead.needs_attention ? '<span class="attention-icon">!</span>' : '')}
         <span class="days-badge">${lead.task_count} tasks</span>
       </div>
+      ${nextStepHtml}
     `;
 
     card.addEventListener('click', () => {
@@ -244,7 +279,7 @@ async function loadDetail(leadId) {
   if (data.attention.length > 0) {
     alertsEl.classList.remove('hidden');
     alertsEl.innerHTML = data.attention.map(a => {
-      const cls = (a.type === 'negative' || a.type === 'stuck') ? 'alert-danger' : 'alert-warn';
+      const cls = (a.type === 'negative' || a.type === 'stuck' || a.type === 'overdue') ? 'alert-danger' : 'alert-warn';
       return `<div class="alert ${cls}"><span class="alert-icon">!</span> ${esc(a.message)}</div>`;
     }).join('');
   } else {
@@ -254,15 +289,8 @@ async function loadDetail(leadId) {
   // Pipeline
   renderPipeline(data.stage, data.stages);
 
-  // Links
-  const linksEl = document.getElementById('links-list');
-  if (data.links.length > 0) {
-    linksEl.innerHTML = data.links.map(l =>
-      `<span class="link-chip">${esc(l.company_norm)} <span class="link-type">${esc(l.match_type)} (${(l.confidence * 100).toFixed(0)}%)</span></span>`
-    ).join('');
-  } else {
-    linksEl.innerHTML = '<span style="color: var(--text-muted); font-size: 13px;">No linked companies</span>';
-  }
+  // Next Steps
+  renderNextSteps(data.nextSteps || []);
 
   // Timeline
   renderTimeline(data.tasks);
@@ -293,6 +321,77 @@ function renderPipeline(currentStage, stages) {
   }
 }
 
+// ── Next Steps ──
+function renderNextSteps(nextSteps) {
+  const el = document.getElementById('next-steps-list');
+  el.innerHTML = '';
+
+  // Reset form
+  document.getElementById('next-step-form').classList.add('hidden');
+
+  if (nextSteps.length === 0) {
+    el.innerHTML = '<div class="next-step-empty">No next steps defined — consider adding one.</div>';
+    return;
+  }
+
+  for (const ns of nextSteps) {
+    const item = document.createElement('div');
+    item.className = 'next-step-item';
+
+    const metaParts = [];
+    if (ns.owner) metaParts.push(`Owner: ${esc(ns.owner)}`);
+    if (ns.due_date) metaParts.push(`Due: ${esc(ns.due_date)}`);
+    if (ns.comments) metaParts.push(esc(ns.comments));
+
+    item.innerHTML = `
+      <div class="ns-content">
+        <div class="ns-title">${esc(ns.next_step)}</div>
+        ${metaParts.length > 0 ? `<div class="ns-meta">${metaParts.join(' &middot; ')}</div>` : ''}
+      </div>
+      <span class="ns-badge ${esc(ns.source)}">${esc(ns.source)}</span>
+      <button class="ns-delete" data-id="${ns.id}" title="Delete">&times;</button>
+    `;
+
+    item.querySelector('.ns-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/next-steps/${ns.id}`, { method: 'DELETE' });
+      if (selectedLeadId) loadDetail(selectedLeadId);
+    });
+
+    el.appendChild(item);
+  }
+}
+
+async function saveNextStep() {
+  if (!selectedLeadId) return;
+
+  const nextStep = document.getElementById('ns-step').value.trim();
+  if (!nextStep) return;
+
+  const body = {
+    next_step: nextStep,
+    owner: document.getElementById('ns-owner').value.trim() || undefined,
+    due_date: document.getElementById('ns-due').value || undefined,
+    comments: document.getElementById('ns-comments').value.trim() || undefined,
+  };
+
+  await fetch(`/api/leads/${selectedLeadId}/next-steps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  // Clear form
+  document.getElementById('ns-step').value = '';
+  document.getElementById('ns-owner').value = '';
+  document.getElementById('ns-due').value = '';
+  document.getElementById('ns-comments').value = '';
+  document.getElementById('next-step-form').classList.add('hidden');
+
+  // Refresh detail
+  loadDetail(selectedLeadId);
+}
+
 function renderTimeline(tasks) {
   const el = document.getElementById('timeline-list');
   el.innerHTML = '';
@@ -304,9 +403,13 @@ function renderTimeline(tasks) {
     return;
   }
 
+  const now = new Date();
   for (const task of filtered) {
+    const isOpen = task.status && task.status.toLowerCase().includes('open');
+    const isOverdue = isOpen && task.date && new Date(task.date) < now;
+
     const item = document.createElement('div');
-    item.className = 'timeline-item' + (task.is_lemlist ? ' lemlist' : '');
+    item.className = 'timeline-item' + (task.is_lemlist ? ' lemlist' : '') + (isOverdue ? ' overdue' : '');
 
     const statusClass = getStatusClass(task.status);
     const hasComments = task.comments && task.comments.trim();
@@ -314,7 +417,10 @@ function renderTimeline(tasks) {
     item.innerHTML = `
       <div class="timeline-date">${esc(task.date || 'No date')}</div>
       <div class="timeline-body">
-        <div class="timeline-subject">${esc(task.subject)}</div>
+        <div class="timeline-subject">
+          ${esc(task.subject)}
+          ${isOverdue ? ' <span class="overdue-badge">OVERDUE</span>' : ''}
+        </div>
         <div class="timeline-status">
           <span class="${statusClass}">${esc(task.status || 'No status')}</span>
         </div>
@@ -394,7 +500,7 @@ async function runImport() {
 
     if (res.ok) {
       importResult.className = 'success';
-      importResult.textContent = `Imported ${data.leads} leads, ${data.tasks} tasks. ${data.matched} companies matched. ${data.unmatched.length} unmatched.`;
+      importResult.textContent = `Imported ${data.leads} leads, ${data.tasks} tasks.`;
       importResult.classList.remove('hidden');
       // Reload dashboard
       await loadLeads();
