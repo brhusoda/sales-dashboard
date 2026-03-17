@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QBR Lead Review Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Top Bar -->
+  <header id="topbar">
+    <div class="topbar-left">
+      <h1>QBR Dashboard</h1>
+    </div>
+    <div id="summary-cards" class="summary-cards">
+      <div class="summary-card" id="card-total">
+        <span class="card-number">-</span>
+        <span class="card-label">Total Leads</span>
+      </div>
+      <div class="summary-card hot" id="card-hot">
+        <span class="card-number">-</span>
+        <span class="card-label">Hot</span>
+      </div>
+      <div class="summary-card warn" id="card-attention">
+        <span class="card-number">-</span>
+        <span class="card-label">Need Attention</span>
+      </div>
+      <div class="summary-card cold" id="card-stale">
+        <span class="card-number">-</span>
+        <span class="card-label">Stale (30d+)</span>
+      </div>
+    </div>
+    <div class="topbar-filters">
+      <input type="text" id="filter-company" class="input" placeholder="Search company...">
+      <select id="filter-owner"><option value="">All Owners</option></select>
+      <select id="filter-rating">
+        <option value="">All Ratings</option>
+        <option value="Hot">Hot</option>
+        <option value="Warm">Warm</option>
+        <option value="Cold">Cold</option>
+      </select>
+      <select id="filter-stage"><option value="">All Stages</option></select>
+      <select id="filter-tasks">
+        <option value="">All Task Counts</option>
+        <option value="0">0 tasks</option>
+        <option value="1-5">1-5 tasks</option>
+        <option value="6-10">6-10 tasks</option>
+        <option value="11+">11+ tasks</option>
+      </select>
+      <select id="sort-by">
+        <option value="attention">Sort: Attention first</option>
+        <option value="company-asc">Sort: Company A-Z</option>
+        <option value="company-desc">Sort: Company Z-A</option>
+        <option value="tasks-desc">Sort: Most tasks</option>
+        <option value="tasks-asc">Sort: Fewest tasks</option>
+        <option value="stage-desc">Sort: Highest stage</option>
+        <option value="stage-asc">Sort: Lowest stage</option>
+        <option value="activity-recent">Sort: Most recent activity</option>
+        <option value="activity-oldest">Sort: Oldest activity</option>
+      </select>
+      <label class="checkbox-label">
+        <input type="checkbox" id="filter-stale"> Stale only
+      </label>
+      <button id="btn-clear-filters" class="btn btn-secondary">Clear filters</button>
+      <button id="btn-reimport" class="btn btn-secondary">Re-import</button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main id="main">
+    <!-- Left Panel: Lead List -->
+    <aside id="lead-list">
+      <div id="lead-list-content"></div>
+    </aside>
+
+    <!-- Right Panel: Lead Detail -->
+    <section id="lead-detail">
+      <div id="detail-placeholder" class="placeholder">
+        <p>Select a lead to view details</p>
+      </div>
+      <div id="detail-content" class="hidden">
+        <!-- Contact Info -->
+        <div id="detail-header">
+          <h2 id="detail-company"></h2>
+          <div id="detail-contact"></div>
+          <div id="detail-meta"></div>
+        </div>
+
+        <!-- Attention Alerts -->
+        <div id="detail-alerts" class="hidden"></div>
+
+        <!-- Stage Pipeline -->
+        <div id="detail-pipeline">
+          <h3>Pipeline Stage</h3>
+          <div id="pipeline-dots"></div>
+        </div>
+
+        <!-- Linked Companies -->
+        <div id="detail-links">
+          <h3>Linked Companies</h3>
+          <div id="links-list"></div>
+        </div>
+
+        <!-- Activity Timeline -->
+        <div id="detail-timeline">
+          <h3>Activity Timeline</h3>
+          <label class="checkbox-label">
+            <input type="checkbox" id="toggle-lemlist"> Show lemlist tasks
+          </label>
+          <button id="btn-expand-all" class="btn btn-secondary">Expand all comments</button>
+          <div id="timeline-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Import Modal -->
+  <div id="import-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Re-import Data</h2>
+      <p>Re-import Excel files into the database. This will update all leads and tasks.</p>
+      <div class="form-group">
+        <label>Leads File:</label>
+        <input type="text" id="import-leads-path" class="input">
+      </div>
+      <div class="form-group">
+        <label>Tasks File:</label>
+        <input type="text" id="import-tasks-path" class="input">
+      </div>
+      <div class="modal-actions">
+        <button id="btn-run-import" class="btn btn-primary">Import</button>
+        <button id="btn-close-modal" class="btn btn-secondary">Cancel</button>
+      </div>
+      <div id="import-result" class="hidden"></div>
+    </div>
+  </div>
+
+  <!-- Unmatched Modal -->
+  <div id="unmatched-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Unmatched Task Companies</h2>
+      <p>These task companies could not be matched to any lead:</p>
+      <div id="unmatched-list"></div>
+      <div class="modal-actions">
+        <button id="btn-close-unmatched" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
